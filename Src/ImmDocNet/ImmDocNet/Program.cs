@@ -32,7 +32,9 @@ using Imm.ImmDocNetLib.Documenters.HTMLDocumenter;
 
 namespace Imm.ImmDocNet
 {
-  class Program
+    using System.Linq;
+
+    class Program
   {
     private const int MAX_VERBOSE_LEVEL = 3;
 
@@ -49,9 +51,11 @@ namespace Imm.ImmDocNet
 
     private static string projectName;
     private static string chmFileNameWithoutExtension;
+    private static string inputDirectory = Environment.CurrentDirectory;
     private static string outputDirectory = "doc";
     private static AssembliesInfo assembliesInfo;
     private static Dictionary<string, bool> excludedFilesNames;
+    private static Dictionary<string, bool> excludedExtensions;
     private static HashSet<string> excludedNamespaces;
     private static DocumentationGenerationOptions docGenOptions = DocumentationGenerationOptions.None;
 
@@ -64,6 +68,7 @@ namespace Imm.ImmDocNet
       ASSEMBLY_CODE_BASE = Assembly.GetExecutingAssembly().GetName().CodeBase;
 
       excludedFilesNames = new Dictionary<string, bool>();
+      excludedExtensions = new Dictionary<string, bool>();
       excludedNamespaces = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     }
 
@@ -132,15 +137,25 @@ namespace Imm.ImmDocNet
       if (filesNames.Count == 0)
       {
         // add files from the current directory
-        filesNames.AddRange(Directory.GetFiles(Environment.CurrentDirectory, "*.exe"));
-        filesNames.AddRange(Directory.GetFiles(Environment.CurrentDirectory, "*.dll"));
-        filesNames.AddRange(Directory.GetFiles(Environment.CurrentDirectory, "*.xml"));
-        filesNames.AddRange(Directory.GetFiles(Environment.CurrentDirectory, "*.docs"));
+        filesNames.AddRange(Directory.GetFiles(inputDirectory, "*.exe"));
+        filesNames.AddRange(Directory.GetFiles(inputDirectory, "*.dll"));
+        filesNames.AddRange(Directory.GetFiles(inputDirectory, "*.xml"));
+        filesNames.AddRange(Directory.GetFiles(inputDirectory, "*.docs"));
       }
       else
       {
         // remove files with unknown extensions
         indicesToBeRemoved = new List<int>();
+
+        if (filesNames.Any(x => x.Contains("*")))
+        {
+            var tempFileNames = new List<string>();
+            foreach (var fileName in filesNames)
+            {
+                tempFileNames.AddRange(Directory.GetFiles(inputDirectory, fileName));
+            }
+            filesNames = tempFileNames;
+        }
 
         for (int i = 0; i < filesNames.Count; i++)
         {
@@ -211,22 +226,7 @@ namespace Imm.ImmDocNet
 
       preparationStartTime = Environment.TickCount;
 
-      bool success = documenter.GenerateDocumentation(outputDirectory, docGenOptions);
-
-      if (verboseLevel > 2)
-      {
-        Console.WriteLine();
-
-        Console.WriteLine("Processing time  : {0:F2} s", processingTime);
-        Console.WriteLine("Preparation time : {0:F2} s", preparationTime);
-        Console.WriteLine("Generating time  : {0:F2} s", generatingTime);
-        Console.WriteLine("Total time       : {0:F2} s", (Environment.TickCount - totalStartTime) / 1000.0f);
-
-        Console.WriteLine();
-
-        Console.WriteLine("Warnings: {0}", Logger.WarningsCount);
-        Console.WriteLine("Errors:   {0}", Logger.ErrorsCount);
-      }
+      bool success = documenter.GenerateDocumentation(outputDirectory, docGenOptions);    
 
       if (verboseLevel > 1 && Logger.WarningsCount > 0)
       {
@@ -248,14 +248,25 @@ namespace Imm.ImmDocNet
           }
 
           Logger.WriteErrors(Console.Error);
-        }
+        }        
+      }
 
-        Environment.Exit(1);
-      }
-      else
+      if (verboseLevel > 2)
       {
-        Environment.Exit(0);
+          Console.WriteLine();
+
+          Console.WriteLine("Processing time  : {0:F2} s", processingTime);
+          Console.WriteLine("Preparation time : {0:F2} s", preparationTime);
+          Console.WriteLine("Generating time  : {0:F2} s", generatingTime);
+          Console.WriteLine("Total time       : {0:F2} s", (Environment.TickCount - totalStartTime) / 1000.0f);
+
+          Console.WriteLine();
+
+          Console.WriteLine("Warnings: {0}", Logger.WarningsCount);
+          Console.WriteLine("Errors:   {0}", Logger.ErrorsCount);
       }
+
+      Environment.Exit(1);
     }
 
     #endregion
@@ -316,6 +327,12 @@ namespace Imm.ImmDocNet
 
           excludedFilesNames[opArg.ToLower()] = true;
         }
+        else if (opName == "excludeExtension" || opName == "exe")
+        {
+            if (opArg == null) { PrintUsageAndExit(); }
+
+            excludedExtensions[opArg.ToLower()] = true;
+        }
         else if (opName == "excludenamespace" || opName == "exn")
         {
           if (opArg == null) { PrintUsageAndExit(); }
@@ -333,6 +350,18 @@ namespace Imm.ImmDocNet
           }
 
           outputDirectory = opArg;
+        }
+        else if (opName == "inputDirectory" || opName == "dir")
+        {
+            if (opArg == null) { PrintUsageAndExit(); }
+
+            if (Path.GetDirectoryName(opArg) == null)
+            {
+                Console.WriteLine("Error: Input directory invalid.");
+                Environment.Exit(1);
+            }
+
+            inputDirectory = opArg;
         }
         else if (opName == "forcedelete" || opName == "fd")
         {
@@ -379,6 +408,13 @@ namespace Imm.ImmDocNet
           if (verboseLevel > 2) { Console.WriteLine("Excluded file {0} (exclusion specified in options).", Path.GetFileName(fullFileName)); }
 
           continue;
+        }
+
+        if (excludedExtensions.Any(x => fileName.ToLower().EndsWith(x.Key)))
+        {
+            if (verboseLevel > 2) { Console.WriteLine("Excluded file {0} (exclusion extension specified in options).", Path.GetFileName(fullFileName)); }
+
+            continue;
         }
 
         if (!File.Exists(fullFileName))
@@ -470,11 +506,13 @@ namespace Imm.ImmDocNet
 
       Console.WriteLine();
       Console.WriteLine("Options:");
-      Console.WriteLine("  -h,   -Help                    displays this message");
+      Console.WriteLine("  -h,   -Help                    displays this message");      
       Console.WriteLine("  -pn,  -ProjectName:STRING      sets STRING as the name of the project");
       Console.WriteLine("  -cn,  -CHMName:STRING          sets STRING as the name of the output CHM file");
       Console.WriteLine("  -ex,  -Exclude:FILE            excludes FILE from processing");
       Console.WriteLine("  -exn, -ExcludeNamespace:STRING excludes namespace STRING from processing");
+      Console.WriteLine("  -exe, -ExcludeExtension:STRING excludes files with extension STRING");
+      Console.WriteLine("  -dir, -InputDirectory:DIR     sets DIR as the input directory");
       Console.WriteLine("  -od,  -OutputDirectory:DIR     sets DIR as the output directory");
       Console.WriteLine("  -fd,  -ForceDelete             forces the program to delete output directory");
       Console.WriteLine("  -iim, -IncludeInternalMembers  internal members will be processed");
